@@ -201,7 +201,8 @@ const I18N = {
     srcAppSuffix: ' (from app)',
     toastTtsVolFollow: 'TTS volume: follow current', toastTtsVol: 'TTS volume: {name}',
     confirmReboot: 'Reboot the speaker? (takes 1-2 minutes to come back)',
-    promptFavName: 'Favorite name', errPrefix: 'Error: ', errDeviceInfo: 'Failed to load device info',
+    enterUrlFirst: 'Enter a stream URL first',
+    errPrefix: 'Error: ', errDeviceInfo: 'Failed to load device info',
     swPendingReboot: 'A software update is pending reboot',
   },
   ja: {
@@ -231,7 +232,8 @@ const I18N = {
     srcAppSuffix: '(アプリから)',
     toastTtsVolFollow: '読み上げ音量: 現在値に追従', toastTtsVol: '読み上げ音量: {name}',
     confirmReboot: 'スピーカーを再起動しますか?(復帰まで1〜2分)',
-    promptFavName: 'お気に入りの名前', errPrefix: 'エラー: ', errDeviceInfo: 'デバイス情報取得エラー',
+    enterUrlFirst: '先にストリームURLを入力してください',
+    errPrefix: 'エラー: ', errDeviceInfo: 'デバイス情報取得エラー',
     swPendingReboot: 'ソフトウェア更新が再起動待ちです',
   },
 };
@@ -497,12 +499,17 @@ async function addSourceFav() {
 
 async function addUriFav() {
   const url = $('uri-url').value.trim();
-  if (!url) return;
-  const name = prompt(t('promptFavName'), url);
-  if (name === null) return;
-  favorites.push({name: name || url, type: 'uri', value: url});
+  if (!url) { toast(t('enterUrlFirst'), true); return; }
+  // prompt()はブラウザによって抑止されるため使わず、URLから名前を自動生成する
+  let name;
+  try {
+    const u = new URL(url);
+    const seg = u.pathname.split('/').filter(Boolean).pop() || '';
+    name = seg ? decodeURIComponent(seg) : u.hostname;
+  } catch { name = url; }
+  favorites.push({name, type: 'uri', value: url});
   await putFavorites();
-  toast(t('toastUriFavAdded'));
+  toast(tf('toastFavAdded', name));
 }
 
 async function loadContentList() {
