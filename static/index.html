@@ -174,6 +174,16 @@
   </div>
 
   <div class="card">
+    <h2 data-i18n="multiroom">Multiroom (Beolink)</h2>
+    <div class="row">
+      <span style="font-size:13px" data-i18n="deviceName">Device name</span>
+      <input type="text" id="fn-name" class="grow">
+      <button onclick="renameDevice()" data-i18n="rename">Rename</button>
+    </div>
+    <div id="beolink-box" style="margin-top:12px"></div>
+  </div>
+
+  <div class="card">
     <h2 data-i18n="power">Power &amp; Maintenance</h2>
     <div class="row">
       <button class="chip" onclick="post('/api/standby',{})" data-i18n="standby">Standby</button>
@@ -215,6 +225,13 @@ const I18N = {
     srcAppSuffix: ' (from app)',
     defaultVolume: 'Power-on volume', hardMaxVolume: 'Volume limit',
     volumeSettingsNote: 'Stored on the speaker itself',
+    multiroom: 'Multiroom (Beolink)', deviceName: 'Device name', rename: 'Rename',
+    join: '▶ Listen', expandTo: '+ Add to group', leave: 'Leave group', unexpand: 'Remove',
+    noPeers: 'No other B&O devices on the network. Peers appear here by name once you add one.',
+    linkedTo: 'In group:',
+    toastRenamed: 'Renamed to "{name}"', toastJoin: 'Joining {name}...',
+    toastExpand: 'Adding {name} to the group...', toastLeave: 'Left the group',
+    toastUnexpand: 'Removed {name}',
     toastVolumeSettings: 'Volume settings saved',
     toastShuffleOn: 'Shuffle on', toastShuffleOff: 'Shuffle off',
     toastRepeat: 'Repeat: {name}', repeatNone: 'off', repeatAll: 'all', repeatTrack: 'track',
@@ -251,6 +268,13 @@ const I18N = {
     srcAppSuffix: '(アプリから)',
     defaultVolume: '起動時音量', hardMaxVolume: '最大音量',
     volumeSettingsNote: 'スピーカー本体に保存されます',
+    multiroom: 'マルチルーム(Beolink)', deviceName: 'デバイス名', rename: '変更',
+    join: '▶ 聴く', expandTo: '+ グループに追加', leave: 'グループ離脱', unexpand: '外す',
+    noPeers: 'ネットワーク上に他のB&O機器がありません。追加すると名前で選べるようになります。',
+    linkedTo: 'グループ中:',
+    toastRenamed: '「{name}」に変更しました', toastJoin: '{name} に参加中...',
+    toastExpand: '{name} をグループに追加中...', toastLeave: 'グループから離脱しました',
+    toastUnexpand: '{name} を外しました',
     toastVolumeSettings: '音量設定を保存しました',
     toastShuffleOn: 'シャッフル オン', toastShuffleOff: 'シャッフル オフ',
     toastRepeat: 'リピート: {name}', repeatNone: 'オフ', repeatAll: '全曲', repeatTrack: '1曲',
@@ -642,6 +666,83 @@ async function loadContentList() {
   });
 }
 
+async function renameDevice() {
+  const name = $('fn-name').value.trim();
+  if (!name) return;
+  await post('/api/friendly-name', {name});
+  $('device-name').textContent = name;
+  toast(tf('toastRenamed', name));
+  loadBeolink();
+}
+
+async function beolinkAction(path, body, toastKey, name) {
+  await post(path, body);
+  toast(name ? tf(toastKey, name) : t(toastKey));
+  setTimeout(loadBeolink, 1500);
+}
+
+async function loadBeolink() {
+  const box = $('beolink-box');
+  try {
+    const b = await fetch('/api/beolink').then(r => r.json());
+    if (b.error) throw new Error(b.error);
+    $('fn-name').value = b.self.name || '';
+    box.innerHTML = '';
+
+    if (!b.peers.length) {
+      box.innerHTML = `<span class="muted-note" style="margin:0">${t('noPeers')}</span>`;
+      return;
+    }
+    b.peers.forEach(p => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.style.marginTop = '8px';
+      const name = document.createElement('span');
+      name.className = 'grow';
+      name.style.fontSize = '14px';
+      name.textContent = p.name || p.jid;
+      const joinBtn = document.createElement('button');
+      joinBtn.className = 'chip';
+      joinBtn.textContent = t('join');
+      joinBtn.onclick = () => beolinkAction('/api/beolink/join', {jid: p.jid}, 'toastJoin', p.name);
+      const expandBtn = document.createElement('button');
+      expandBtn.className = 'chip';
+      expandBtn.textContent = t('expandTo');
+      expandBtn.onclick = () => beolinkAction('/api/beolink/expand', {jid: p.jid}, 'toastExpand', p.name);
+      row.append(name, joinBtn, expandBtn);
+      box.appendChild(row);
+    });
+
+    if (b.listeners.length) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.style.marginTop = '10px';
+      const label = document.createElement('span');
+      label.className = 'muted-note';
+      label.style.margin = '0';
+      label.textContent = t('linkedTo');
+      row.appendChild(label);
+      b.listeners.forEach(l => {
+        const peer = b.peers.find(p => p.jid === l.jid);
+        const name = peer ? peer.name : l.jid;
+        const btn = document.createElement('button');
+        btn.className = 'chip';
+        btn.textContent = '✕ ' + name;
+        btn.onclick = () => beolinkAction('/api/beolink/unexpand', {jid: l.jid}, 'toastUnexpand', name);
+        row.appendChild(btn);
+      });
+      const leaveBtn = document.createElement('button');
+      leaveBtn.className = 'chip danger';
+      leaveBtn.textContent = t('leave');
+      leaveBtn.onclick = () => beolinkAction('/api/beolink/leave', {}, 'toastLeave');
+      row.appendChild(leaveBtn);
+      box.appendChild(row);
+    }
+  } catch(e) {
+    box.innerHTML = `<span class="muted-note" style="margin:0">${t('errPrefix')}${e.message}</span>`;
+  }
+}
+
 async function init() {
   applyI18n();
   renderFavorites();
@@ -664,6 +765,7 @@ async function init() {
   loadTtsVol();
   loadQueueSettings();
   loadVolumeSettings();
+  loadBeolink();
 
   const ov = await fetch('/api/overview').then(r => r.json());
   if (ov.error) { toast(t('errDeviceInfo'), true); return; }

@@ -13,10 +13,11 @@ from pathlib import Path
 
 from aiohttp import web
 
-from bo import load_config, resolve_host
+from bo import load_config, resolve_host, save_config
 from mozart_api.models import (
     Action,
     Bass,
+    ProductFriendlyName,
     Loudness,
     OverlayPlayRequest,
     OverlayPlayRequestTextToSpeechTextToSpeech,
@@ -271,10 +272,40 @@ async def h_content(request: web.Request, client: MozartClient) -> dict:
     return {"items": result}
 
 
+async def h_friendly_name(request: web.Request, client: MozartClient) -> None:
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise ValueError("name is required")
+    await client.set_product_friendly_name(
+        product_friendly_name=ProductFriendlyName(friendly_name=name)
+    )
+    # devices.json のキーも追従させる(次回discoverまでズレないように)
+    device = request.query.get("device") or None
+    config = load_config()
+    old = device if device in config["devices"] else config["default"]
+    if old and old in config["devices"] and old != name:
+        config["devices"][name] = config["devices"].pop(old)
+        if config["default"] == old:
+            config["default"] = name
+        save_config(config)
+
+
+async def h_beolink_expand(request: web.Request, client: MozartClient) -> None:
+    body = await request.json()
+    await client.post_beolink_expand(jid=body["jid"])
+
+
+async def h_beolink_unexpand(request: web.Request, client: MozartClient) -> None:
+    body = await request.json()
+    await client.post_beolink_unexpand(jid=body["jid"])
+
+
 async def h_beolink(request: web.Request, client: MozartClient) -> dict:
     self_info = await client.get_beolink_self()
     peers = await client.get_beolink_peers()
     listeners = await client.get_beolink_listeners()
+    available = await client.get_beolink_available_listeners()
     return {
         "self": {"name": self_info.friendly_name, "jid": self_info.jid},
         "peers": [
@@ -282,6 +313,9 @@ async def h_beolink(request: web.Request, client: MozartClient) -> dict:
             for p in (peers or [])
         ],
         "listeners": [{"jid": l.jid} for l in (listeners or [])],
+        "available": [
+            {"name": a.friendly_name, "jid": a.jid} for a in (available or [])
+        ],
     }
 
 
@@ -671,8 +705,11 @@ async def make_app() -> web.Application:
         ("/api/adjustments", h_adjustments),
         ("/api/favorites/play", h_favorite_play),
         ("/api/favorites/save-current", h_favorite_save_current),
+        ("/api/friendly-name", h_friendly_name),
         ("/api/beolink/join", h_beolink_join),
         ("/api/beolink/leave", h_beolink_leave),
+        ("/api/beolink/expand", h_beolink_expand),
+        ("/api/beolink/unexpand", h_beolink_unexpand),
         ("/api/standby", h_standby),
         ("/api/reboot", h_reboot),
         ("/api/stereotest", h_stereotest),
