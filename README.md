@@ -59,7 +59,10 @@ bo devices / bo default <name>
 .venv/bin/python gui_server.py    # → http://localhost:8342/
 ```
 
-- Playback / volume / mute with live status and artwork (updates every 3 s)
+- Playback / volume / mute with live status and artwork — pushed in real time over
+  WebSocket (speaker notifications are relayed to the browser; falls back to polling)
+- Seek bar (for seekable sources), repeat / shuffle toggles
+- Power-on default volume and hardware volume limit (stored on the speaker itself)
 - **Favorites**: save net-radio stations ("save now playing" or pick from the device's
   known content), input sources, and stream URLs — switch with one tap.
   Stations play directly via the `scene/run` radio action, so you are not limited

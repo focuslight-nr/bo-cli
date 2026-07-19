@@ -20,11 +20,13 @@ from mozart_api.models import (
     Loudness,
     OverlayPlayRequest,
     OverlayPlayRequestTextToSpeechTextToSpeech,
+    PlayQueueSettings,
     SceneProperties,
     Treble,
     Uri,
     VolumeLevel,
     VolumeMute,
+    VolumeSettings,
 )
 from mozart_api.mozart_client import MozartClient
 
@@ -107,11 +109,11 @@ def pick_art_url(meta, host: str) -> str | None:
     return url
 
 
-async def h_state(request: web.Request, client: MozartClient) -> dict:
+async def build_state(client: MozartClient, host: str) -> dict:
     volume = await client.get_current_volume()
     playback = await client.get_playback_state()
     meta = playback.metadata
-    host = resolve_host(request.query.get("device") or None)
+    progress = playback.progress
     return {
         "art": pick_art_url(meta, host),
         "state": playback.state.value if playback.state else None,
@@ -123,7 +125,14 @@ async def h_state(request: web.Request, client: MozartClient) -> dict:
         "organization": meta.organization if meta else None,
         "volume": volume.level.level if volume.level else None,
         "muted": bool(volume.muted and volume.muted.muted),
+        "progress": progress.progress if progress else None,
+        "duration": progress.total_duration if progress else None,
     }
+
+
+async def h_state(request: web.Request, client: MozartClient) -> dict:
+    host = resolve_host(request.query.get("device") or None)
+    return await build_state(client, host)
 
 
 async def h_overview(request: web.Request, client: MozartClient) -> dict:
@@ -305,6 +314,147 @@ async def h_stereotest(request: web.Request, client: MozartClient) -> None:
 
     device = request.query.get("device") or None
     await do_stereotest(client, resolve_host(device), None)
+
+
+# ---- ライブ状態(スピーカーWebSocket → ブラウザWebSocket) ----
+
+
+class LiveState:
+    def __init__(self) -> None:
+        self.browsers: set[web.WebSocketResponse] = set()
+        self.state: dict = {}
+        self.mozart: MozartClient | None = None
+
+
+live = LiveState()
+
+
+async def live_broadcast() -> None:
+    if not live.browsers:
+        return
+    msg = json.dumps(live.state)
+    dead = set()
+    for ws in live.browsers:
+        try:
+            await ws.send_str(msg)
+        except Exception:
+            dead.add(ws)
+    live.browsers -= dead
+
+
+async def start_live_client(app: web.Application):
+    """スピーカーの通知WebSocketを購読し、状態をブラウザへ中継する。"""
+    try:
+        host = resolve_host(None)
+    except SystemExit:
+        yield  # デバイス未登録ならライブ機能なしで起動
+        return
+
+    client = MozartClient(host)
+    live.mozart = client
+    try:
+        live.state = await build_state(client, host)
+    except Exception as e:
+        print(f"[live] initial state failed: {e}")
+
+    async def on_volume(v) -> None:
+        if v.level:
+            live.state["volume"] = v.level.level
+        if v.muted is not None:
+            live.state["muted"] = bool(v.muted and v.muted.muted)
+        await live_broadcast()
+
+    async def on_state(s) -> None:
+        live.state["state"] = s.value
+        await live_broadcast()
+
+    async def on_metadata(m) -> None:
+        live.state.update(
+            artist=m.artist_name,
+            title=m.title,
+            organization=m.organization,
+            art=pick_art_url(m, host),
+        )
+        await live_broadcast()
+
+    async def on_source(s) -> None:
+        live.state["source"] = s.type.value if s.type else None
+        await live_broadcast()
+
+    async def on_progress(p) -> None:
+        live.state["progress"] = p.progress
+        live.state["duration"] = p.total_duration
+        await live_broadcast()
+
+    client.get_volume_notifications(on_volume)
+    client.get_playback_state_notifications(on_state)
+    client.get_playback_metadata_notifications(on_metadata)
+    client.get_source_change_notifications(on_source)
+    client.get_playback_progress_notifications(on_progress)
+    await client.connect_notifications(remote_control=False, reconnect=True)
+    print(f"[live] connected to {host}")
+
+    yield
+
+    client.disconnect_notifications()
+    await client.close_api_client()
+
+
+async def h_ws(request: web.Request) -> web.WebSocketResponse:
+    ws = web.WebSocketResponse(heartbeat=30)
+    await ws.prepare(request)
+    live.browsers.add(ws)
+    try:
+        if live.state:
+            await ws.send_str(json.dumps(live.state))
+        async for _ in ws:
+            pass
+    finally:
+        live.browsers.discard(ws)
+    return ws
+
+
+# ---- 再生詳細設定 ----
+
+
+async def h_seek(request: web.Request, client: MozartClient) -> None:
+    body = await request.json()
+    await client.seek_to_position(position_ms=int(body["positionMs"]))
+
+
+async def h_queue_settings_get(request: web.Request, client: MozartClient) -> dict:
+    qs = await client.get_settings_queue()
+    return {"repeat": qs.repeat, "shuffle": bool(qs.shuffle)}
+
+
+async def h_queue_settings_post(request: web.Request, client: MozartClient) -> None:
+    body = await request.json()
+    kwargs = {}
+    if "repeat" in body:
+        if body["repeat"] not in ("all", "track", "none"):
+            raise ValueError(f"invalid repeat: {body['repeat']}")
+        kwargs["repeat"] = body["repeat"]
+    if "shuffle" in body:
+        kwargs["shuffle"] = bool(body["shuffle"])
+    await client.set_settings_queue(play_queue_settings=PlayQueueSettings(**kwargs))
+
+
+async def h_volume_settings_get(request: web.Request, client: MozartClient) -> dict:
+    vs = await client.get_volume_settings()
+    return {
+        "default": vs.default.level if vs.default else None,
+        "maximum": vs.maximum.level if vs.maximum else None,
+    }
+
+
+async def h_volume_settings_post(request: web.Request, client: MozartClient) -> None:
+    body = await request.json()
+    kwargs = {}
+    if body.get("default") is not None:
+        kwargs["default"] = VolumeLevel(level=int(body["default"]))
+    if body.get("maximum") is not None:
+        kwargs["maximum"] = VolumeLevel(level=int(body["maximum"]))
+    await client.set_volume_settings(volume_settings=VolumeSettings(**kwargs))
 
 
 # ---- お気に入り ----
@@ -492,6 +642,7 @@ async def make_app() -> web.Application:
     app = web.Application()
     r = app.router
     r.add_get("/", h_index)
+    r.add_get("/ws", h_ws)
     r.add_get("/api/devices", h_devices)
     r.add_get("/api/night", h_night_get)
     r.add_put("/api/night", h_night_put)
@@ -500,10 +651,15 @@ async def make_app() -> web.Application:
     r.add_get("/api/favorites", h_favorites_get)
     r.add_put("/api/favorites", h_favorites_put)
     r.add_get("/api/state", await api(h_state))
+    r.add_get("/api/queue-settings", await api(h_queue_settings_get))
+    r.add_get("/api/volume-settings", await api(h_volume_settings_get))
     r.add_get("/api/overview", await api(h_overview))
     r.add_get("/api/content", await api(h_content))
     r.add_get("/api/beolink", await api(h_beolink))
     for path, handler in [
+        ("/api/seek", h_seek),
+        ("/api/queue-settings", h_queue_settings_post),
+        ("/api/volume-settings", h_volume_settings_post),
         ("/api/volume", h_volume),
         ("/api/mute", h_mute),
         ("/api/playback", h_playback),
@@ -523,6 +679,7 @@ async def make_app() -> web.Application:
     ]:
         r.add_post(path, await api(handler))
     app.cleanup_ctx.append(start_background)
+    app.cleanup_ctx.append(start_live_client)
     return app
 
 

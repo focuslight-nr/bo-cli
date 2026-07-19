@@ -80,8 +80,15 @@
       <button onclick="playback('prev')">⏮</button>
       <button class="primary" id="btn-playpause" onclick="togglePlay()">▶</button>
       <button onclick="playback('skip')">⏭</button>
+      <button id="btn-shuffle" onclick="toggleShuffle()" title="Shuffle">🔀</button>
+      <button id="btn-repeat" onclick="cycleRepeat()" title="Repeat">🔁</button>
       <span class="grow"></span>
       <button id="btn-mute" onclick="toggleMute()">🔇</button>
+    </div>
+    <div class="row" style="margin-top:12px; display:none" id="seek-row">
+      <span class="muted-note" style="margin:0" id="seek-cur">0:00</span>
+      <input type="range" id="seek" class="grow" min="0" max="100" oninput="seekPreview=true" onchange="seekCommit()">
+      <span class="muted-note" style="margin:0" id="seek-total">0:00</span>
     </div>
     <div class="row" style="margin-top:12px">
       <input type="range" id="vol" class="grow" min="0" max="100" oninput="volPreview()" onchange="volCommit()">
@@ -136,6 +143,13 @@
     <div class="row" style="margin-top:12px; font-size:14px">
       <input type="checkbox" id="adj-loudness" onchange="setAdj('loudness', this.checked)">
       <label for="adj-loudness" data-i18n="loudness">Loudness</label>
+    </div>
+    <div class="row" style="margin-top:14px; font-size:13px">
+      <span data-i18n="defaultVolume">Power-on volume</span>
+      <input type="number" id="vs-default" min="0" max="100" style="width:5em" onchange="saveVolumeSettings()">
+      <span data-i18n="hardMaxVolume">Volume limit</span>
+      <input type="number" id="vs-max" min="0" max="100" style="width:5em" onchange="saveVolumeSettings()">
+      <span class="muted-note" style="margin:0" data-i18n="volumeSettingsNote">Stored on the speaker itself</span>
     </div>
   </div>
 
@@ -199,6 +213,11 @@ const I18N = {
     toastSourceFavAdded: 'Source added to favorites', toastUriFavAdded: 'URL added to favorites',
     srcAppInitiated: 'This source activates itself when you cast to the speaker from its app (Spotify, Qobuz, AirPlay...). It cannot be switched to from here.',
     srcAppSuffix: ' (from app)',
+    defaultVolume: 'Power-on volume', hardMaxVolume: 'Volume limit',
+    volumeSettingsNote: 'Stored on the speaker itself',
+    toastVolumeSettings: 'Volume settings saved',
+    toastShuffleOn: 'Shuffle on', toastShuffleOff: 'Shuffle off',
+    toastRepeat: 'Repeat: {name}', repeatNone: 'off', repeatAll: 'all', repeatTrack: 'track',
     toastTtsVolFollow: 'TTS volume: follow current', toastTtsVol: 'TTS volume: {name}',
     confirmReboot: 'Reboot the speaker? (takes 1-2 minutes to come back)',
     enterUrlFirst: 'Enter a stream URL first',
@@ -230,6 +249,11 @@ const I18N = {
     toastSourceFavAdded: 'ソースをお気に入りに追加', toastUriFavAdded: 'URLをお気に入りに追加',
     srcAppInitiated: 'このソースはアプリ側(Spotify、Qobuz、AirPlay等)からキャストすると自動で切り替わります。ここからは切替できません。',
     srcAppSuffix: '(アプリから)',
+    defaultVolume: '起動時音量', hardMaxVolume: '最大音量',
+    volumeSettingsNote: 'スピーカー本体に保存されます',
+    toastVolumeSettings: '音量設定を保存しました',
+    toastShuffleOn: 'シャッフル オン', toastShuffleOff: 'シャッフル オフ',
+    toastRepeat: 'リピート: {name}', repeatNone: 'オフ', repeatAll: '全曲', repeatTrack: '1曲',
     toastTtsVolFollow: '読み上げ音量: 現在値に追従', toastTtsVol: '読み上げ音量: {name}',
     confirmReboot: 'スピーカーを再起動しますか?(復帰まで1〜2分)',
     enterUrlFirst: '先にストリームURLを入力してください',
@@ -286,33 +310,73 @@ async function post(path, body) {
   } catch(e) { toast(t('errPrefix') + e.message, true); throw e; }
 }
 
+let seekPreview = false;
+
+function fmtTime(sec) {
+  sec = Math.max(0, Math.round(sec));
+  return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
+}
+
+function applyState(s) {
+  state = s;
+  $('conn-dot').className = 'dot on';
+  const track = [state.artist, state.title].filter(Boolean).join(' / ')
+    || state.organization || '';
+  $('track-info').innerHTML =
+    `<span class="state">${state.state || '–'} · ${state.source || t('noSource')}</span>` +
+    (track ? `<br>${track}` : '');
+  const art = $('artwork');
+  if (state.art) {
+    if (art.getAttribute('src') !== state.art) art.src = state.art;
+    art.style.display = '';
+  } else {
+    art.style.display = 'none';
+  }
+  $('btn-playpause').textContent = state.state === 'started' ? '⏸' : '▶';
+  $('btn-mute').style.opacity = state.muted ? 1 : .45;
+  if (!volDragging && state.volume !== null) {
+    $('vol').value = state.volume;
+    $('vol-num').textContent = state.volume;
+  }
+  if (state.duration) {
+    $('seek-row').style.display = '';
+    $('seek').max = state.duration;
+    if (!seekPreview) $('seek').value = state.progress || 0;
+    $('seek-cur').textContent = fmtTime(state.progress || 0);
+    $('seek-total').textContent = fmtTime(state.duration);
+  } else {
+    $('seek-row').style.display = 'none';
+  }
+}
+
 async function refreshState() {
   try {
     const res = await fetch('/api/state');
     if (!res.ok) throw new Error();
-    state = await res.json();
-    $('conn-dot').className = 'dot on';
-    const track = [state.artist, state.title].filter(Boolean).join(' / ')
-      || state.organization || '';
-    $('track-info').innerHTML =
-      `<span class="state">${state.state || '–'} · ${state.source || t('noSource')}</span>` +
-      (track ? `<br>${track}` : '');
-    const art = $('artwork');
-    if (state.art) {
-      if (art.getAttribute('src') !== state.art) art.src = state.art;
-      art.style.display = '';
-    } else {
-      art.style.display = 'none';
-    }
-    $('btn-playpause').textContent = state.state === 'started' ? '⏸' : '▶';
-    $('btn-mute').style.opacity = state.muted ? 1 : .45;
-    if (!volDragging && state.volume !== null) {
-      $('vol').value = state.volume;
-      $('vol-num').textContent = state.volume;
-    }
+    applyState(await res.json());
   } catch(e) {
     $('conn-dot').className = 'dot';
   }
+}
+
+// WebSocketでライブ更新。切断時は3秒ポーリングにフォールバックして5秒ごとに再接続
+let pollTimer = null;
+function startPolling() {
+  if (!pollTimer) pollTimer = setInterval(refreshState, 3000);
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+function connectWs() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.onopen = () => stopPolling();
+  ws.onmessage = ev => applyState(JSON.parse(ev.data));
+  ws.onclose = () => {
+    $('conn-dot').className = 'dot';
+    startPolling();
+    setTimeout(connectWs, 5000);
+  };
 }
 
 function volPreview() { volDragging = true; $('vol-num').textContent = $('vol').value; }
@@ -332,6 +396,60 @@ async function toggleMute() {
 async function playback(command) {
   await post('/api/playback', {command});
   setTimeout(refreshState, 400);
+}
+
+async function seekCommit() {
+  seekPreview = false;
+  await post('/api/seek', {positionMs: parseInt($('seek').value) * 1000});
+}
+
+let queueSettings = {repeat: 'none', shuffle: false};
+
+function renderQueueButtons() {
+  $('btn-shuffle').style.opacity = queueSettings.shuffle ? 1 : .45;
+  $('btn-repeat').style.opacity = queueSettings.repeat !== 'none' ? 1 : .45;
+  $('btn-repeat').textContent = queueSettings.repeat === 'track' ? '🔂' : '🔁';
+}
+
+async function toggleShuffle() {
+  queueSettings.shuffle = !queueSettings.shuffle;
+  await post('/api/queue-settings', {shuffle: queueSettings.shuffle});
+  renderQueueButtons();
+  toast(queueSettings.shuffle ? t('toastShuffleOn') : t('toastShuffleOff'));
+}
+
+async function cycleRepeat() {
+  const order = {none: 'all', all: 'track', track: 'none'};
+  queueSettings.repeat = order[queueSettings.repeat] || 'all';
+  await post('/api/queue-settings', {repeat: queueSettings.repeat});
+  renderQueueButtons();
+  const labels = {none: t('repeatNone'), all: t('repeatAll'), track: t('repeatTrack')};
+  toast(tf('toastRepeat', labels[queueSettings.repeat]));
+}
+
+async function loadQueueSettings() {
+  try {
+    const qs = await fetch('/api/queue-settings').then(r => r.json());
+    if (!qs.error) queueSettings = qs;
+  } catch(e) {}
+  renderQueueButtons();
+}
+
+async function saveVolumeSettings() {
+  const body = {};
+  if ($('vs-default').value !== '') body.default = parseInt($('vs-default').value);
+  if ($('vs-max').value !== '') body.maximum = parseInt($('vs-max').value);
+  await post('/api/volume-settings', body);
+  toast(t('toastVolumeSettings'));
+}
+
+async function loadVolumeSettings() {
+  try {
+    const vs = await fetch('/api/volume-settings').then(r => r.json());
+    if (vs.error) return;
+    if (vs.default !== null) $('vs-default').value = vs.default;
+    if (vs.maximum !== null) $('vs-max').value = vs.maximum;
+  } catch(e) {}
 }
 
 async function say() {
@@ -539,10 +657,13 @@ async function init() {
   $('night-standby').value = night.standbyAt;
 
   refreshState();
-  setInterval(refreshState, 3000);
+  startPolling();
+  connectWs();
   loadFavorites();
   loadContentList();
   loadTtsVol();
+  loadQueueSettings();
+  loadVolumeSettings();
 
   const ov = await fetch('/api/overview').then(r => r.json());
   if (ov.error) { toast(t('errDeviceInfo'), true); return; }
