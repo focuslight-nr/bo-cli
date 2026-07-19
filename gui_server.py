@@ -157,7 +157,13 @@ async def h_overview(request: web.Request, client: MozartClient) -> dict:
         "adjustments": adjustments,
         "softwareUpdate": software,
         "sources": [
-            {"id": s.id, "name": s.name, "enabled": bool(s.is_enabled)}
+            {
+                "id": s.id,
+                "name": s.name,
+                "enabled": bool(s.is_enabled),
+                # Chromecast/Spotify等のセッション型ソースはスピーカー側から起動できない
+                "playable": bool(s.is_playable),
+            }
             for s in (sources.items or [])
         ]
         if sources

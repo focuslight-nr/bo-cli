@@ -197,6 +197,8 @@ const I18N = {
     toastRebootSent: 'Reboot command sent', toastFavPlay: 'Playing {name}',
     toastFavSaved: 'Saved "{name}"', toastFavAdded: 'Added "{name}"',
     toastSourceFavAdded: 'Source added to favorites', toastUriFavAdded: 'URL added to favorites',
+    srcAppInitiated: 'This source activates itself when you cast to the speaker from its app (Spotify, Qobuz, AirPlay...). It cannot be switched to from here.',
+    srcAppSuffix: ' (from app)',
     toastTtsVolFollow: 'TTS volume: follow current', toastTtsVol: 'TTS volume: {name}',
     confirmReboot: 'Reboot the speaker? (takes 1-2 minutes to come back)',
     promptFavName: 'Favorite name', errPrefix: 'Error: ', errDeviceInfo: 'Failed to load device info',
@@ -225,6 +227,8 @@ const I18N = {
     toastRebootSent: '再起動コマンド送信', toastFavPlay: '{name} を再生',
     toastFavSaved: '「{name}」を保存しました', toastFavAdded: '「{name}」を追加しました',
     toastSourceFavAdded: 'ソースをお気に入りに追加', toastUriFavAdded: 'URLをお気に入りに追加',
+    srcAppInitiated: 'このソースはアプリ側(Spotify、Qobuz、AirPlay等)からキャストすると自動で切り替わります。ここからは切替できません。',
+    srcAppSuffix: '(アプリから)',
     toastTtsVolFollow: '読み上げ音量: 現在値に追従', toastTtsVol: '読み上げ音量: {name}',
     confirmReboot: 'スピーカーを再起動しますか?(復帰まで1〜2分)',
     promptFavName: 'お気に入りの名前', errPrefix: 'エラー: ', errDeviceInfo: 'デバイス情報取得エラー',
@@ -355,8 +359,15 @@ async function playUri() {
   toast(t('toastPlayReq'));
 }
 
+let sourcePlayable = {};
+
 async function activateSource() {
-  await post('/api/source', {id: $('sources').value});
+  const id = $('sources').value;
+  if (sourcePlayable[id] === false) {
+    toast(t('srcAppInitiated'), true);
+    return;
+  }
+  await post('/api/source', {id});
   toast(t('toastSourceSwitch'));
   setTimeout(refreshState, 600);
 }
@@ -475,7 +486,11 @@ async function addFromContent() {
 
 async function addSourceFav() {
   const sel = $('sources');
-  favorites.push({name: sel.options[sel.selectedIndex].textContent, type: 'source', value: sel.value});
+  if (sourcePlayable[sel.value] === false) {
+    toast(t('srcAppInitiated'), true);
+    return;
+  }
+  favorites.push({name: sel.options[sel.selectedIndex].textContent.replace(t('srcAppSuffix'), ''), type: 'source', value: sel.value});
   await putFavorites();
   toast(t('toastSourceFavAdded'));
 }
@@ -535,9 +550,12 @@ async function init() {
   });
 
   $('sources').innerHTML = '';
+  sourcePlayable = {};
   ov.sources.filter(s => s.enabled).forEach(s => {
+    sourcePlayable[s.id] = s.playable;
     const o = document.createElement('option');
-    o.value = s.id; o.textContent = s.name;
+    o.value = s.id;
+    o.textContent = s.name + (s.playable ? '' : t('srcAppSuffix'));
     $('sources').appendChild(o);
   });
 
