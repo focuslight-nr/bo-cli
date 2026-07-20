@@ -2,6 +2,8 @@
 
 [English README](README.md)
 
+![Logo](bo-gui.png)
+
 Bang & Olufsen の [Mozartプラットフォーム](https://github.com/bang-olufsen/mozart-open-api)搭載スピーカー
 (Beosound Balance / Emerge / Level / A5 / A9、Beolab 8 / 28、Beosound Theatre など)を
 macOSから制御するツール集。公式Pythonパッケージ [mozart-api](https://pypi.org/project/mozart-api) を利用しています。

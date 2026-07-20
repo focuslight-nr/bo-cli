@@ -2,6 +2,8 @@
 
 [日本語版 README](README.ja.md)
 
+![Logo](bo-gui.png)
+
 A toolkit for controlling Bang & Olufsen speakers on the [Mozart platform](https://github.com/bang-olufsen/mozart-open-api)
 (Beosound Balance / Emerge / Level / A5 / A9, Beolab 8 / 28, Beosound Theatre, and more)
 from macOS, built on the official [mozart-api](https://pypi.org/project/mozart-api) Python package.
