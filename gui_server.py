@@ -120,7 +120,6 @@ async def build_state(client: MozartClient, host: str) -> dict:
     meta = playback.metadata
     progress = playback.progress
     return {
-        "art": pick_art_url(meta, host),
         "state": playback.state.value if playback.state else None,
         "source": playback.source.type.value
         if playback.source and playback.source.type
@@ -133,6 +132,7 @@ async def build_state(client: MozartClient, host: str) -> dict:
         "progress": progress.progress if progress else None,
         "duration": (progress.total_duration if progress else None)
         or local_play["duration"],
+        "art": pick_art_url(meta, host) or local_play["art"],
     }
 
 
@@ -231,7 +231,7 @@ async def h_say(request: web.Request, client: MozartClient) -> None:
 
 async def h_uri(request: web.Request, client: MozartClient) -> None:
     body = await request.json()
-    local_play["duration"] = None  # 手動URI再生の総時間は不明
+    clear_local_play()  # 手動URI再生の総時間・アートは不明
     await client.post_uri_source(uri=Uri(location=body["url"]))
 
 
@@ -413,7 +413,7 @@ async def start_live_client(app: web.Application):
             artist=m.artist_name,
             title=m.title,
             organization=m.organization,
-            art=pick_art_url(m, host),
+            art=pick_art_url(m, host) or local_play["art"],
         )
         await live_broadcast()
 
@@ -421,7 +421,7 @@ async def start_live_client(app: web.Application):
         source = s.type.value if s.type else None
         live.state["source"] = source
         if source != "uriStreamer":
-            local_play["duration"] = None
+            clear_local_play()
         await live_broadcast()
 
     async def on_progress(p) -> None:
@@ -504,9 +504,44 @@ async def h_volume_settings_post(request: web.Request, client: MozartClient) -> 
 
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".flac", ".wav", ".aiff", ".aif", ".ogg", ".opus"}
 
-# Mozartはローカルファイル(uriStreamer)再生でtotal_durationを報告しないため、
-# 再生開始時にafinfoで測った総時間を控えておき、状態配信時に補完する
-local_play = {"duration": None}
+# Mozartはローカルファイル(uriStreamer)再生でtotal_durationもアートワークも
+# 報告しないため、再生開始時に総時間(afinfo)と埋め込みカバーアート(mutagen)を
+# 控えておき、状態配信時に補完する
+local_play = {"duration": None, "art": None, "art_bytes": None, "art_mime": None}
+
+
+def clear_local_play() -> None:
+    local_play.update(duration=None, art=None, art_bytes=None, art_mime=None)
+
+
+def extract_art(p: Path) -> tuple[bytes, str] | None:
+    """埋め込みカバーアートを (bytes, mimetype) で返す。なければNone。"""
+    try:
+        from mutagen import File as MutagenFile
+        from mutagen.mp4 import MP4Cover
+
+        f = MutagenFile(str(p))
+        if f is None:
+            return None
+        pictures = getattr(f, "pictures", None)  # FLAC
+        if pictures:
+            return pictures[0].data, pictures[0].mime or "image/jpeg"
+        if f.tags:
+            for key in f.tags.keys():  # ID3 (mp3/aiff)
+                if key.startswith("APIC"):
+                    apic = f.tags[key]
+                    return apic.data, apic.mime or "image/jpeg"
+            covr = f.tags.get("covr")  # MP4 (m4a/aac)
+            if covr:
+                mime = (
+                    "image/png"
+                    if covr[0].imageformat == MP4Cover.FORMAT_PNG
+                    else "image/jpeg"
+                )
+                return bytes(covr[0]), mime
+    except Exception:
+        pass
+    return None
 
 
 async def probe_duration(p: Path) -> int | None:
@@ -568,6 +603,14 @@ async def h_media(request: web.Request) -> web.FileResponse:
     return web.FileResponse(p)  # Range対応なのでスピーカー側のシークも効く
 
 
+async def h_media_art(request: web.Request) -> web.Response:
+    if not local_play["art_bytes"]:
+        raise web.HTTPNotFound
+    return web.Response(
+        body=local_play["art_bytes"], content_type=local_play["art_mime"]
+    )
+
+
 async def h_library_play(request: web.Request, client: MozartClient) -> dict:
     body = await request.json()
     rel = body["path"]
@@ -577,11 +620,18 @@ async def h_library_play(request: web.Request, client: MozartClient) -> dict:
     device_ip = resolve_host(request.query.get("device") or None)
     url = f"http://{local_ip_towards(device_ip)}:{PORT}/media/{quote(rel)}"
     local_play["duration"] = await probe_duration(p)
+    art = extract_art(p)
+    if art:
+        local_play["art_bytes"], local_play["art_mime"] = art
+        # 相対URLなのでlocalhostでもLAN内の他端末からでも同じHTMLで表示できる
+        local_play["art"] = f"/media-art?v={quote(rel)}"
+    else:
+        local_play["art"] = local_play["art_bytes"] = local_play["art_mime"] = None
     await client.post_uri_source(uri=Uri(location=url))
-    if local_play["duration"]:
-        live.state["duration"] = local_play["duration"]
-        live.state["progress"] = 0
-        await live_broadcast()
+    live.state["duration"] = local_play["duration"]
+    live.state["progress"] = 0
+    live.state["art"] = local_play["art"]
+    await live_broadcast()
     return {"playing": p.name, "duration": local_play["duration"]}
 
 
@@ -795,6 +845,7 @@ async def make_app() -> web.Application:
     r.add_get("/api/library", h_library)
     r.add_get("/api/music-dir", h_music_dir_get)
     r.add_put("/api/music-dir", h_music_dir_put)
+    r.add_get("/media-art", h_media_art)
     r.add_get("/media/{path:.*}", h_media)
     r.add_get("/api/favorites", h_favorites_get)
     r.add_put("/api/favorites", h_favorites_put)

@@ -1,1 +1,2 @@
 mozart-api>=6.2
+mutagen>=1.47

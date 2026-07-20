@@ -69,7 +69,9 @@ bo devices / bo default <name>
   to the 4 hardware presets
 - **Local files**: browse a music folder on the Mac (default `~/Music`, configurable)
   and stream mp3/m4a/flac/wav/… to the speaker. Served with Range support, so
-  seeking works; playback requires the Mac to stay awake
+  seeking works; embedded cover art and duration are shown (probed with
+  mutagen/afinfo since Mozart does not report them for URI streams).
+  Playback requires the Mac to stay awake
 - TTS with a persistent TTS-specific volume (playback volume is restored afterwards)
 - Sound: listening modes, bass / treble / loudness
 - **Night mode**: time window + volume cap (enforced every minute) + optional
