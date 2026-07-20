@@ -215,6 +215,7 @@
     <div class="row" style="font-size:13px">
       <span data-i18n="musicFolder">Folder</span>
       <input type="text" id="music-dir" class="grow">
+      <button id="btn-browse" onclick="chooseFolder()" data-i18n="browse">Browse…</button>
       <button onclick="saveMusicDir()" data-i18n="save">Save</button>
     </div>
     <div id="lib-path" class="muted-note" style="margin-top:10px"></div>
@@ -255,7 +256,9 @@ const I18N = {
     srcAppSuffix: ' (from app)',
     defaultVolume: 'Power-on volume', hardMaxVolume: 'Volume limit',
     volumeSettingsNote: 'Stored on the speaker itself',
-    localFiles: 'Local Files', musicFolder: 'Folder',
+    localFiles: 'Local Files', musicFolder: 'Folder', browse: 'Browse…',
+    browsing: 'Dialog opened on the Mac running the server…',
+    browseUnavailable: 'Folder dialog unavailable here — type the path instead',
     emptyDir: 'No audio files in this folder',
     toastMusicDir: 'Music folder saved', toastPlayingFile: 'Playing {name}',
     playedFromMac: 'Streamed from this Mac — playback stops if the Mac sleeps',
@@ -302,7 +305,9 @@ const I18N = {
     srcAppSuffix: '(アプリから)',
     defaultVolume: '起動時音量', hardMaxVolume: '最大音量',
     volumeSettingsNote: 'スピーカー本体に保存されます',
-    localFiles: 'ローカルファイル', musicFolder: 'フォルダ',
+    localFiles: 'ローカルファイル', musicFolder: 'フォルダ', browse: '参照…',
+    browsing: 'サーバーが動いているMacの画面にダイアログを表示しました…',
+    browseUnavailable: 'ここではダイアログを使えません — パスを直接入力してください',
     emptyDir: 'このフォルダに音声ファイルはありません',
     toastMusicDir: '音楽フォルダを保存しました', toastPlayingFile: '{name} を再生',
     playedFromMac: 'このMacから配信されます — Macがスリープすると再生が止まります',
@@ -723,6 +728,24 @@ let libPath = '';
 async function loadMusicDir() {
   const data = await fetch('/api/music-dir').then(r => r.json());
   $('music-dir').value = data.musicDir;
+}
+
+async function chooseFolder() {
+  const btn = $('btn-browse');
+  btn.disabled = true;
+  toast(t('browsing'));
+  try {
+    const res = await fetch('/api/choose-folder', {method: 'POST'});
+    const data = await res.json();
+    if (res.status === 501) { toast(t('browseUnavailable'), true); return; }
+    if (data.cancelled || !data.path) return;
+    $('music-dir').value = data.path;
+    await saveMusicDir();
+  } catch(e) {
+    toast(t('browseUnavailable'), true);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function saveMusicDir() {

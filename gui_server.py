@@ -711,6 +711,35 @@ async def play_next_in_folder() -> None:
         print(f"[library] auto-advance failed: {e}", flush=True)
 
 
+async def h_choose_folder(request: web.Request) -> web.Response:
+    """macOSのネイティブフォルダ選択ダイアログをMac画面に出してパスを返す。
+
+    サーバーが動いているMacの画面にダイアログが出るため、localhostで開いている
+    場合のみ実用的。リモート端末やダイアログを出せない環境では501を返し、
+    フロント側はテキスト入力にフォールバックする。
+    """
+    start = music_root()
+    default_loc = (
+        f'default location (POSIX file "{start}")' if start.is_dir() else ""
+    )
+    script = (
+        f'POSIX path of (choose folder with prompt "音楽フォルダを選択" {default_loc})'
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "osascript", "-e", script,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await asyncio.wait_for(proc.communicate(), 120)
+    except (asyncio.TimeoutError, FileNotFoundError):
+        return web.json_response({"error": "dialog unavailable"}, status=501)
+    if proc.returncode != 0:
+        # ユーザーがキャンセル(-128)した場合など
+        return web.json_response({"cancelled": True})
+    return web.json_response({"path": out.decode().strip().rstrip("/")})
+
+
 async def h_music_dir_get(request: web.Request) -> web.Response:
     return web.json_response({"musicDir": load_gui_config()["musicDir"]})
 
@@ -921,6 +950,7 @@ async def make_app() -> web.Application:
     r.add_get("/api/library", h_library)
     r.add_get("/api/music-dir", h_music_dir_get)
     r.add_put("/api/music-dir", h_music_dir_put)
+    r.add_post("/api/choose-folder", h_choose_folder)
     r.add_get("/media-art", h_media_art)
     r.add_get("/media/{path:.*}", h_media)
     r.add_get("/api/favorites", h_favorites_get)

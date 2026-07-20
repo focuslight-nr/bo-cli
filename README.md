@@ -69,7 +69,8 @@ bo devices / bo default <name>
   known content), input sources, and stream URLs — switch with one tap.
   Stations play directly via the `scene/run` radio action, so you are not limited
   to the 4 hardware presets
-- **Local files**: browse a music folder on the Mac (default `~/Music`, configurable)
+- **Local files**: browse a music folder on the Mac (default `~/Music`, set by typing
+  a path or via the native folder picker with "Browse…" when using localhost)
   and stream mp3/m4a/flac/wav/… to the speaker. Served with Range support, so
   seeking works; embedded cover art and duration are shown (probed with
   mutagen/afinfo since Mozart does not report them for URI streams).
