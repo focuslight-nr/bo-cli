@@ -136,6 +136,17 @@
   </div>
 
   <div class="card">
+    <h2 data-i18n="localFiles">Local Files</h2>
+    <div class="row" style="font-size:13px">
+      <span data-i18n="musicFolder">Folder</span>
+      <input type="text" id="music-dir" class="grow">
+      <button onclick="saveMusicDir()" data-i18n="save">Save</button>
+    </div>
+    <div id="lib-path" class="muted-note" style="margin-top:10px"></div>
+    <div id="lib-list" style="margin-top:4px"></div>
+  </div>
+
+  <div class="card">
     <h2 data-i18n="sound">Sound</h2>
     <div class="row" id="listening-modes"></div>
     <div class="sliderline"><span data-i18n="bass">Bass</span><input type="range" id="adj-bass" min="-6" max="6" step="1" onchange="setAdj('bass', this.value)"><span class="val" id="adj-bass-val"></span></div>
@@ -225,6 +236,10 @@ const I18N = {
     srcAppSuffix: ' (from app)',
     defaultVolume: 'Power-on volume', hardMaxVolume: 'Volume limit',
     volumeSettingsNote: 'Stored on the speaker itself',
+    localFiles: 'Local Files', musicFolder: 'Folder',
+    emptyDir: 'No audio files in this folder',
+    toastMusicDir: 'Music folder saved', toastPlayingFile: 'Playing {name}',
+    playedFromMac: 'Streamed from this Mac — playback stops if the Mac sleeps',
     multiroom: 'Multiroom (Beolink)', deviceName: 'Device name', rename: 'Rename',
     join: '▶ Listen', expandTo: '+ Add to group', leave: 'Leave group', unexpand: 'Remove',
     noPeers: 'No other B&O devices on the network. Peers appear here by name once you add one.',
@@ -268,6 +283,10 @@ const I18N = {
     srcAppSuffix: '(アプリから)',
     defaultVolume: '起動時音量', hardMaxVolume: '最大音量',
     volumeSettingsNote: 'スピーカー本体に保存されます',
+    localFiles: 'ローカルファイル', musicFolder: 'フォルダ',
+    emptyDir: 'このフォルダに音声ファイルはありません',
+    toastMusicDir: '音楽フォルダを保存しました', toastPlayingFile: '{name} を再生',
+    playedFromMac: 'このMacから配信されます — Macがスリープすると再生が止まります',
     multiroom: 'マルチルーム(Beolink)', deviceName: 'デバイス名', rename: '変更',
     join: '▶ 聴く', expandTo: '+ グループに追加', leave: 'グループ離脱', unexpand: '外す',
     noPeers: 'ネットワーク上に他のB&O機器がありません。追加すると名前で選べるようになります。',
@@ -666,6 +685,57 @@ async function loadContentList() {
   });
 }
 
+let libPath = '';
+
+async function loadMusicDir() {
+  const data = await fetch('/api/music-dir').then(r => r.json());
+  $('music-dir').value = data.musicDir;
+}
+
+async function saveMusicDir() {
+  const musicDir = $('music-dir').value.trim();
+  if (!musicDir) return;
+  const res = await fetch('/api/music-dir', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({musicDir})}).then(r => r.json());
+  if (res.error) { toast(t('errPrefix') + res.error, true); return; }
+  toast(t('toastMusicDir'));
+  libPath = '';
+  loadLibrary();
+}
+
+async function loadLibrary() {
+  const list = $('lib-list');
+  const data = await fetch('/api/library?path=' + encodeURIComponent(libPath)).then(r => r.json());
+  if (data.error) {
+    list.innerHTML = `<div class="muted-note">${data.error}</div>`;
+    $('lib-path').textContent = '';
+    return;
+  }
+  $('lib-path').textContent = '/' + (data.path || '');
+  list.innerHTML = '';
+
+  const addRow = (icon, name, onclick) => {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.style.cssText = 'display:block;width:100%;text-align:left;margin-top:6px';
+    b.textContent = icon + ' ' + name;
+    b.onclick = onclick;
+    list.appendChild(b);
+  };
+
+  if (libPath) {
+    const parent = libPath.split('/').slice(0, -1).join('/');
+    addRow('📁', '..', () => { libPath = parent; loadLibrary(); });
+  }
+  data.dirs.forEach(d => addRow('📁', d.name, () => { libPath = d.path; loadLibrary(); }));
+  data.files.forEach(f => addRow('♪', f.name, async () => {
+    const r = await post('/api/library/play', {path: f.path});
+    toast(tf('toastPlayingFile', r.playing));
+  }));
+  if (!data.dirs.length && !data.files.length) {
+    list.innerHTML = `<div class="muted-note">${t('emptyDir')}</div>`;
+  }
+}
+
 async function renameDevice() {
   const name = $('fn-name').value.trim();
   if (!name) return;
@@ -766,6 +836,8 @@ async function init() {
   loadQueueSettings();
   loadVolumeSettings();
   loadBeolink();
+  loadMusicDir();
+  loadLibrary();
 
   const ov = await fetch('/api/overview').then(r => r.json());
   if (ov.error) { toast(t('errDeviceInfo'), true); return; }

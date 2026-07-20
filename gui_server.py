@@ -10,10 +10,11 @@ import asyncio
 import datetime
 import json
 from pathlib import Path
+from urllib.parse import quote
 
 from aiohttp import web
 
-from bo import load_config, resolve_host, save_config
+from bo import load_config, local_ip_towards, resolve_host, save_config
 from mozart_api.models import (
     Action,
     Bass,
@@ -47,6 +48,8 @@ DEFAULT_GUI_CONFIG = {
     "favorites": [],
     # TTS読み上げのデフォルト音量(0-100)。Noneなら現在の音量で読み上げる
     "ttsVolume": None,
+    # ローカル音楽フォルダ。GUIから変更可能
+    "musicDir": "/music",
 }
 
 
@@ -59,6 +62,7 @@ def load_gui_config() -> dict:
             "night": night,
             "favorites": config.get("favorites", []),
             "ttsVolume": config.get("ttsVolume"),
+            "musicDir": config.get("musicDir", DEFAULT_GUI_CONFIG["musicDir"]),
         }
     return json.loads(json.dumps(DEFAULT_GUI_CONFIG))
 
@@ -491,6 +495,81 @@ async def h_volume_settings_post(request: web.Request, client: MozartClient) -> 
     await client.set_volume_settings(volume_settings=VolumeSettings(**kwargs))
 
 
+# ---- ローカルファイル ----
+
+AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".flac", ".wav", ".aiff", ".aif", ".ogg", ".opus"}
+
+
+def music_root() -> Path:
+    return Path(load_gui_config()["musicDir"]).expanduser()
+
+
+def resolve_media_path(rel: str) -> Path:
+    """音楽フォルダ外へのパストラバーサルを拒否して絶対パスを返す。"""
+    root = music_root().resolve()
+    p = (root / rel).resolve()
+    if p != root and root not in p.parents:
+        raise web.HTTPForbidden(text="path outside music dir")
+    return p
+
+
+async def h_library(request: web.Request) -> web.Response:
+    rel = request.query.get("path", "")
+    root = music_root()
+    if not root.is_dir():
+        return web.json_response(
+            {"error": f"music dir not found: {root}", "path": rel}, status=404
+        )
+    target = resolve_media_path(rel)
+    if not target.is_dir():
+        return web.json_response({"error": f"not a directory: {rel}"}, status=404)
+    dirs, files = [], []
+    for entry in sorted(target.iterdir(), key=lambda e: e.name.lower()):
+        if entry.name.startswith("."):
+            continue
+        rel_child = str(entry.relative_to(root))
+        if entry.is_dir():
+            dirs.append({"name": entry.name, "path": rel_child})
+        elif entry.suffix.lower() in AUDIO_EXTS:
+            files.append({"name": entry.name, "path": rel_child})
+    return web.json_response({"path": rel, "dirs": dirs, "files": files})
+
+
+async def h_media(request: web.Request) -> web.FileResponse:
+    p = resolve_media_path(request.match_info["path"])
+    if not p.is_file():
+        raise web.HTTPNotFound
+    return web.FileResponse(p)  # Range対応なのでスピーカー側のシークも効く
+
+
+async def h_library_play(request: web.Request, client: MozartClient) -> dict:
+    body = await request.json()
+    rel = body["path"]
+    p = resolve_media_path(rel)
+    if not p.is_file():
+        raise ValueError(f"file not found: {rel}")
+    device_ip = resolve_host(request.query.get("device") or None)
+    url = f"http://{local_ip_towards(device_ip)}:{PORT}/media/{quote(rel)}"
+    await client.post_uri_source(uri=Uri(location=url))
+    return {"playing": p.name}
+
+
+async def h_music_dir_get(request: web.Request) -> web.Response:
+    return web.json_response({"musicDir": load_gui_config()["musicDir"]})
+
+
+async def h_music_dir_put(request: web.Request) -> web.Response:
+    body = await request.json()
+    music_dir = (body.get("musicDir") or "").strip()
+    if not music_dir:
+        return web.json_response({"error": "musicDir is required"}, status=400)
+    config = load_gui_config()
+    config["musicDir"] = music_dir
+    save_gui_config(config)
+    exists = Path(music_dir).expanduser().is_dir()
+    return web.json_response({"musicDir": music_dir, "exists": exists})
+
+
 # ---- お気に入り ----
 
 
@@ -682,6 +761,10 @@ async def make_app() -> web.Application:
     r.add_put("/api/night", h_night_put)
     r.add_get("/api/tts-volume", h_tts_volume_get)
     r.add_put("/api/tts-volume", h_tts_volume_put)
+    r.add_get("/api/library", h_library)
+    r.add_get("/api/music-dir", h_music_dir_get)
+    r.add_put("/api/music-dir", h_music_dir_put)
+    r.add_get("/media/{path:.*}", h_media)
     r.add_get("/api/favorites", h_favorites_get)
     r.add_put("/api/favorites", h_favorites_put)
     r.add_get("/api/state", await api(h_state))
@@ -691,6 +774,7 @@ async def make_app() -> web.Application:
     r.add_get("/api/content", await api(h_content))
     r.add_get("/api/beolink", await api(h_beolink))
     for path, handler in [
+        ("/api/library/play", h_library_play),
         ("/api/seek", h_seek),
         ("/api/queue-settings", h_queue_settings_post),
         ("/api/volume-settings", h_volume_settings_post),
