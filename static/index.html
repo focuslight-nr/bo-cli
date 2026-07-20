@@ -91,6 +91,7 @@
       <span class="muted-note" style="margin:0" id="seek-total">0:00</span>
     </div>
     <div class="row" style="margin-top:12px">
+      <span id="vol-icon" style="font-size:15px">🔊</span>
       <input type="range" id="vol" class="grow" min="0" max="100" oninput="volPreview()" onchange="volCommit()">
       <span id="vol-num">–</span>
     </div>
@@ -381,6 +382,8 @@ function applyState(s) {
     $('vol').value = state.volume;
     $('vol-num').textContent = state.volume;
   }
+  $('vol-icon').textContent =
+    state.muted ? '🔇' : state.volume === 0 ? '🔈' : state.volume <= 50 ? '🔉' : '🔊';
   if (state.duration) {
     $('seek-row').style.display = '';
     $('seek').max = state.duration;
