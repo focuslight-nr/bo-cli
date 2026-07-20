@@ -71,13 +71,16 @@ bo devices / bo default <name>
   and stream mp3/m4a/flac/wav/… to the speaker. Served with Range support, so
   seeking works; embedded cover art and duration are shown (probed with
   mutagen/afinfo since Mozart does not report them for URI streams).
-  Playback requires the Mac to stay awake
+  When a track ends, the next file in the same folder plays automatically,
+  honoring the repeat (off/all/track) and shuffle settings — album playback
+  just works. Playback requires the Mac to stay awake
 - TTS with a persistent TTS-specific volume (playback volume is restored afterwards)
 - Sound: listening modes, bass / treble / loudness
 - **Night mode**: time window + volume cap (enforced every minute) + optional
   auto-standby time — all editable in the GUI, stored in `~/.config/bo-cli/gui.json`
 - Power: standby / all-standby / stereo test / reboot
 - UI in English (default) or Japanese — toggle top-right, choice persists
+- Optional two-column layout for desktop (local files on the right), also persisted
 
 ## Notify server
 

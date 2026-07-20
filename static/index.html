@@ -62,13 +62,25 @@
   .nightgrid { display: grid; grid-template-columns: auto 1fr; gap: 10px 14px; align-items: center; font-size: 14px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; display: inline-block; margin-right: 7px; }
   .dot.on { background: #7ec08a; }
-  #btn-lang { float: right; }
+  #btn-lang, #btn-layout { float: right; }
+  #btn-layout { margin-right: 8px; }
+  /* 2段レイアウト(PC向け): ローカルファイルを右列に */
+  body.twocol { max-width: 1280px; }
+  body.twocol #layout {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 0 14px; align-items: start;
+  }
+  @media (max-width: 900px) { body.twocol { max-width: 760px; } body.twocol #layout { display: block; } }
 </style>
 </head>
 <body>
   <h1><span class="dot" id="conn-dot"></span>B&O CONTROL <small id="device-name"></small>
     <button class="chip" id="btn-lang" onclick="toggleLang()">日本語</button>
+    <button class="chip" id="btn-layout" onclick="toggleLayout()">◫</button>
   </h1>
+
+  <div id="layout">
+  <div id="col-main">
 
   <div class="card">
     <h2 data-i18n="playback">Playback</h2>
@@ -137,17 +149,6 @@
   </div>
 
   <div class="card">
-    <h2 data-i18n="localFiles">Local Files</h2>
-    <div class="row" style="font-size:13px">
-      <span data-i18n="musicFolder">Folder</span>
-      <input type="text" id="music-dir" class="grow">
-      <button onclick="saveMusicDir()" data-i18n="save">Save</button>
-    </div>
-    <div id="lib-path" class="muted-note" style="margin-top:10px"></div>
-    <div id="lib-list" style="margin-top:4px"></div>
-  </div>
-
-  <div class="card">
     <h2 data-i18n="sound">Sound</h2>
     <div class="row" id="listening-modes"></div>
     <div class="sliderline"><span data-i18n="bass">Bass</span><input type="range" id="adj-bass" min="-6" max="6" step="1" onchange="setAdj('bass', this.value)"><span class="val" id="adj-bass-val"></span></div>
@@ -205,6 +206,23 @@
     </div>
     <div class="muted-note" id="sw-info"></div>
   </div>
+
+  </div><!-- /col-main -->
+  <div id="col-side">
+
+  <div class="card">
+    <h2 data-i18n="localFiles">Local Files</h2>
+    <div class="row" style="font-size:13px">
+      <span data-i18n="musicFolder">Folder</span>
+      <input type="text" id="music-dir" class="grow">
+      <button onclick="saveMusicDir()" data-i18n="save">Save</button>
+    </div>
+    <div id="lib-path" class="muted-note" style="margin-top:10px"></div>
+    <div id="lib-list" style="margin-top:4px"></div>
+  </div>
+
+  </div><!-- /col-side -->
+  </div><!-- /layout -->
 
   <div id="toast"></div>
 
@@ -331,6 +349,18 @@ function toggleLang() {
   applyI18n();
   renderFavorites();
   refreshState();
+}
+
+function applyLayout() {
+  const two = localStorage.getItem('bo-layout') === '2col';
+  document.body.classList.toggle('twocol', two);
+  $('btn-layout').textContent = two ? '▤' : '◫';
+}
+
+function toggleLayout() {
+  localStorage.setItem('bo-layout',
+    localStorage.getItem('bo-layout') === '2col' ? '1col' : '2col');
+  applyLayout();
 }
 
 let state = {};
@@ -817,6 +847,7 @@ async function loadBeolink() {
 }
 
 async function init() {
+  applyLayout();
   applyI18n();
   renderFavorites();
 

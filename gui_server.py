@@ -407,6 +407,12 @@ async def start_live_client(app: web.Application):
     async def on_state(s) -> None:
         live.state["state"] = s.value
         await live_broadcast()
+        # uriStreamerの自然終了は"ended"ではなく"stopped"で通知される。
+        # 最後まで到達していた場合のみ次の曲へ(途中の手動停止では進めない)
+        if s.value in ("stopped", "ended") and local_play["path"]:
+            duration = local_play["duration"]
+            if duration and local_play["max_progress"] >= duration - 5:
+                asyncio.create_task(play_next_in_folder())
 
     async def on_metadata(m) -> None:
         live.state.update(
@@ -427,6 +433,8 @@ async def start_live_client(app: web.Application):
     async def on_progress(p) -> None:
         live.state["progress"] = p.progress
         live.state["duration"] = p.total_duration or local_play["duration"]
+        if p.progress:
+            local_play["max_progress"] = max(local_play["max_progress"], p.progress)
         await live_broadcast()
 
     client.get_volume_notifications(on_volume)
@@ -507,11 +515,30 @@ AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".flac", ".wav", ".aiff", ".aif", ".ogg", 
 # Mozartはローカルファイル(uriStreamer)再生でtotal_durationもアートワークも
 # 報告しないため、再生開始時に総時間(afinfo)と埋め込みカバーアート(mutagen)を
 # 控えておき、状態配信時に補完する
-local_play = {"duration": None, "art": None, "art_bytes": None, "art_mime": None}
+local_play = {
+    "duration": None,
+    "art": None,
+    "art_bytes": None,
+    "art_mime": None,
+    # フォルダ連続再生用: 再生中ファイルの相対パスと、同フォルダ内の音声ファイル一覧
+    "path": None,
+    "folder": [],
+    # 最後まで聴いたかの判定用(uriStreamerは自然終了でもendedではなくstoppedになり、
+    # progressも0に戻るため、最大到達位置を自前で追跡する)
+    "max_progress": 0,
+}
 
 
 def clear_local_play() -> None:
-    local_play.update(duration=None, art=None, art_bytes=None, art_mime=None)
+    local_play.update(
+        duration=None,
+        art=None,
+        art_bytes=None,
+        art_mime=None,
+        path=None,
+        folder=[],
+        max_progress=0,
+    )
 
 
 def extract_art(p: Path) -> tuple[bytes, str] | None:
@@ -611,13 +638,10 @@ async def h_media_art(request: web.Request) -> web.Response:
     )
 
 
-async def h_library_play(request: web.Request, client: MozartClient) -> dict:
-    body = await request.json()
-    rel = body["path"]
+async def start_local_file(client: MozartClient, rel: str, device_ip: str) -> dict:
     p = resolve_media_path(rel)
     if not p.is_file():
         raise ValueError(f"file not found: {rel}")
-    device_ip = resolve_host(request.query.get("device") or None)
     url = f"http://{local_ip_towards(device_ip)}:{PORT}/media/{quote(rel)}"
     local_play["duration"] = await probe_duration(p)
     art = extract_art(p)
@@ -627,12 +651,64 @@ async def h_library_play(request: web.Request, client: MozartClient) -> dict:
         local_play["art"] = f"/media-art?v={quote(rel)}"
     else:
         local_play["art"] = local_play["art_bytes"] = local_play["art_mime"] = None
+    root = music_root().resolve()
+    local_play["path"] = rel
+    local_play["max_progress"] = 0
+    local_play["folder"] = sorted(
+        (
+            str(e.relative_to(root))
+            for e in p.parent.iterdir()
+            if e.is_file()
+            and not e.name.startswith(".")
+            and e.suffix.lower() in AUDIO_EXTS
+        ),
+        key=str.lower,
+    )
     await client.post_uri_source(uri=Uri(location=url))
     live.state["duration"] = local_play["duration"]
     live.state["progress"] = 0
     live.state["art"] = local_play["art"]
     await live_broadcast()
     return {"playing": p.name, "duration": local_play["duration"]}
+
+
+async def h_library_play(request: web.Request, client: MozartClient) -> dict:
+    body = await request.json()
+    device_ip = resolve_host(request.query.get("device") or None)
+    return await start_local_file(client, body["path"], device_ip)
+
+
+async def play_next_in_folder() -> None:
+    """曲の自然終了時に、リピート/シャッフル設定に従って同フォルダの次の曲へ進む。"""
+    path, files = local_play["path"], local_play["folder"]
+    client = live.mozart
+    if not path or path not in files or client is None:
+        return
+    try:
+        qs = await client.get_settings_queue()
+        repeat, shuffle = qs.repeat or "none", bool(qs.shuffle)
+    except Exception:
+        repeat, shuffle = "none", False
+    if repeat == "track":
+        next_rel = path
+    elif shuffle:
+        import random
+
+        others = [f for f in files if f != path] or [path]
+        next_rel = random.choice(others)
+    else:
+        i = files.index(path) + 1
+        if i < len(files):
+            next_rel = files[i]
+        elif repeat == "all":
+            next_rel = files[0]
+        else:
+            return  # リピートオフ: フォルダ末尾で再生終了
+    try:
+        await start_local_file(client, next_rel, resolve_host(None))
+        print(f"[library] next: {next_rel}", flush=True)
+    except Exception as e:
+        print(f"[library] auto-advance failed: {e}", flush=True)
 
 
 async def h_music_dir_get(request: web.Request) -> web.Response:
