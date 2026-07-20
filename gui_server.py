@@ -131,7 +131,8 @@ async def build_state(client: MozartClient, host: str) -> dict:
         "volume": volume.level.level if volume.level else None,
         "muted": bool(volume.muted and volume.muted.muted),
         "progress": progress.progress if progress else None,
-        "duration": progress.total_duration if progress else None,
+        "duration": (progress.total_duration if progress else None)
+        or local_play["duration"],
     }
 
 
@@ -230,6 +231,7 @@ async def h_say(request: web.Request, client: MozartClient) -> None:
 
 async def h_uri(request: web.Request, client: MozartClient) -> None:
     body = await request.json()
+    local_play["duration"] = None  # 手動URI再生の総時間は不明
     await client.post_uri_source(uri=Uri(location=body["url"]))
 
 
@@ -416,12 +418,15 @@ async def start_live_client(app: web.Application):
         await live_broadcast()
 
     async def on_source(s) -> None:
-        live.state["source"] = s.type.value if s.type else None
+        source = s.type.value if s.type else None
+        live.state["source"] = source
+        if source != "uriStreamer":
+            local_play["duration"] = None
         await live_broadcast()
 
     async def on_progress(p) -> None:
         live.state["progress"] = p.progress
-        live.state["duration"] = p.total_duration
+        live.state["duration"] = p.total_duration or local_play["duration"]
         await live_broadcast()
 
     client.get_volume_notifications(on_volume)
@@ -499,6 +504,27 @@ async def h_volume_settings_post(request: web.Request, client: MozartClient) -> 
 
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".flac", ".wav", ".aiff", ".aif", ".ogg", ".opus"}
 
+# Mozartはローカルファイル(uriStreamer)再生でtotal_durationを報告しないため、
+# 再生開始時にafinfoで測った総時間を控えておき、状態配信時に補完する
+local_play = {"duration": None}
+
+
+async def probe_duration(p: Path) -> int | None:
+    """macOSのafinfoで音声ファイルの総時間(秒)を取得する。"""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "afinfo", str(p),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+        for line in out.decode(errors="replace").splitlines():
+            if "estimated duration" in line:
+                return int(float(line.split(":", 1)[1].split()[0]))
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
 
 def music_root() -> Path:
     return Path(load_gui_config()["musicDir"]).expanduser()
@@ -550,8 +576,13 @@ async def h_library_play(request: web.Request, client: MozartClient) -> dict:
         raise ValueError(f"file not found: {rel}")
     device_ip = resolve_host(request.query.get("device") or None)
     url = f"http://{local_ip_towards(device_ip)}:{PORT}/media/{quote(rel)}"
+    local_play["duration"] = await probe_duration(p)
     await client.post_uri_source(uri=Uri(location=url))
-    return {"playing": p.name}
+    if local_play["duration"]:
+        live.state["duration"] = local_play["duration"]
+        live.state["progress"] = 0
+        await live_broadcast()
+    return {"playing": p.name, "duration": local_play["duration"]}
 
 
 async def h_music_dir_get(request: web.Request) -> web.Response:
