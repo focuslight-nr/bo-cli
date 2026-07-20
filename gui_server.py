@@ -49,7 +49,7 @@ DEFAULT_GUI_CONFIG = {
     # TTS読み上げのデフォルト音量(0-100)。Noneなら現在の音量で読み上げる
     "ttsVolume": None,
     # ローカル音楽フォルダ。GUIから変更可能
-    "musicDir": "/music",
+    "musicDir": "~/Music",
 }
 
 

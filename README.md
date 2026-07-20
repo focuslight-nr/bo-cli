@@ -67,7 +67,7 @@ bo devices / bo default <name>
   known content), input sources, and stream URLs — switch with one tap.
   Stations play directly via the `scene/run` radio action, so you are not limited
   to the 4 hardware presets
-- **Local files**: browse a music folder on the Mac (default `/music`, configurable)
+- **Local files**: browse a music folder on the Mac (default `~/Music`, configurable)
   and stream mp3/m4a/flac/wav/… to the speaker. Served with Range support, so
   seeking works; playback requires the Mac to stay awake
 - TTS with a persistent TTS-specific volume (playback volume is restored afterwards)
