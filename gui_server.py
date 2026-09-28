@@ -115,18 +115,46 @@ def pick_art_url(meta, host: str) -> str | None:
     return url
 
 
+# LibreTime(旧Airtime)系のネットラジオ局は、番組情報が無いときStreamTitleに
+# "<局名> - offline" を入れてくる(実例: "Shonan Beach FM - offline",
+# "Airtime - offline")。曲名として表示すると曲が流れていないように見えるので、
+# 曲名なしとして扱い、局名表示へフォールバックさせる。
+OFFLINE_PLACEHOLDER = re.compile(r"\s-\soffline$", re.IGNORECASE)
+
+
+def is_offline_placeholder(title, artist, source) -> bool:
+    """局側のプレースホルダ曲名かどうか。
+
+    「Offline」という実在曲を巻き込まないよう、ネットラジオで、かつ
+    アーティスト名が無く、かつ末尾が " - offline" のときだけ真とする。
+    """
+    return (
+        source == "netRadio"
+        and not artist
+        and bool(title)
+        and OFFLINE_PLACEHOLDER.search(title.strip()) is not None
+    )
+
+
 async def build_state(client: MozartClient, host: str) -> dict:
     volume = await client.get_current_volume()
     playback = await client.get_playback_state()
     meta = playback.metadata
     progress = playback.progress
+    source = (
+        playback.source.type.value
+        if playback.source and playback.source.type
+        else None
+    )
+    artist = meta.artist_name if meta else None
+    title = meta.title if meta else None
+    if is_offline_placeholder(title, artist, source):
+        title = None
     return {
         "state": playback.state.value if playback.state else None,
-        "source": playback.source.type.value
-        if playback.source and playback.source.type
-        else None,
-        "artist": meta.artist_name if meta else None,
-        "title": meta.title if meta else None,
+        "source": source,
+        "artist": artist,
+        "title": title,
         "organization": meta.organization if meta else None,
         "volume": volume.level.level if volume.level else None,
         "muted": bool(volume.muted and volume.muted.muted),
