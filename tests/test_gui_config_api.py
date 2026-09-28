@@ -165,7 +165,7 @@ async def test_put_favorites_defaults_name_to_value(cli):
 
 async def test_put_favorites_valid_list_persists_and_returns(cli):
     entries = [
-        {"type": "radio", "value": "r1"},
+        {"type": "radio", "value": "1234567890123456"},
         {"type": "source", "value": "s1"},
     ]
     resp = await cli.put("/api/favorites", json=entries)
@@ -235,3 +235,48 @@ def test_in_window_overnight_outside():
     end = datetime.time(7, 0)
     assert gui_server.in_window(now, start, end) is False
 
+
+def _radio(value):
+    return [{"type": "radio", "value": value, "name": "ラジオ"}]
+
+
+async def test_favorites_put_accepts_16_digit_radio_id(cli):
+    resp = await cli.put("/api/favorites", json=_radio("1234567890123456"))
+    assert resp.status == 200
+    body = await resp.json()
+    assert body[0]["value"] == "1234567890123456"
+
+
+async def test_favorites_put_rejects_short_radio_id(cli):
+    resp = await cli.put("/api/favorites", json=_radio("1234"))
+    assert resp.status == 400
+    assert "16 digits" in (await resp.json())["error"]
+
+
+async def test_favorites_put_rejects_long_radio_id(cli):
+    resp = await cli.put("/api/favorites", json=_radio("12345678901234567"))
+    assert resp.status == 400
+
+
+async def test_favorites_put_rejects_non_digit_radio_id(cli):
+    resp = await cli.put("/api/favorites", json=_radio("abcdefghijklmnop"))
+    assert resp.status == 400
+
+
+async def test_favorites_put_rejected_radio_id_does_not_overwrite(cli):
+    await cli.put("/api/favorites", json=_radio("1234567890123456"))
+    await cli.put("/api/favorites", json=_radio("999"))
+    kept = await (await cli.get("/api/favorites")).json()
+    assert kept[0]["value"] == "1234567890123456"
+
+
+async def test_favorites_put_still_accepts_uri_and_source(cli):
+    resp = await cli.put(
+        "/api/favorites",
+        json=[
+            {"type": "uri", "value": "http://x/a.mp3"},
+            {"type": "source", "value": "spotify"},
+        ],
+    )
+    assert resp.status == 200
+    assert len(await resp.json()) == 2

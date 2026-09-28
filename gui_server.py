@@ -9,6 +9,7 @@ http://localhost:8342/ でブラウザUIを提供する。
 import asyncio
 import datetime
 import json
+import re
 from pathlib import Path
 from urllib.parse import quote
 
@@ -811,6 +812,11 @@ async def h_favorites_get(request: web.Request) -> web.Response:
     return web.json_response(load_gui_config()["favorites"])
 
 
+# Mozartの Action.radio_station_id は16桁固定。保存時に弾かないと、
+# 再生しようとした時点で初めて502になる。
+RADIO_STATION_ID = re.compile(r"^\d{16}$")
+
+
 async def h_favorites_put(request: web.Request) -> web.Response:
     favorites = await request.json()
     if not isinstance(favorites, list):
@@ -818,6 +824,11 @@ async def h_favorites_put(request: web.Request) -> web.Response:
     for fav in favorites:
         if fav.get("type") not in ("radio", "source", "uri") or not fav.get("value"):
             return web.json_response({"error": f"invalid entry: {fav}"}, status=400)
+        if fav["type"] == "radio" and not RADIO_STATION_ID.match(str(fav["value"])):
+            return web.json_response(
+                {"error": f"radio station id must be 16 digits: {fav['value']}"},
+                status=400,
+            )
         fav.setdefault("name", fav["value"])
     config = load_gui_config()
     config["favorites"] = favorites
