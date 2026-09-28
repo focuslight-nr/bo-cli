@@ -146,8 +146,34 @@ def resolve_host(target: str | None) -> str:
     return target
 
 
-async def with_client(host: str, func) -> None:
+# 応答しないスピーカー(ディープスタンバイ中はネットワークごと眠る)を
+# 待ち続けないための上限。mozart-apiの既定は1リクエスト5分で、その間
+# CLIもGUIも固まったままになる。
+REQUEST_TIMEOUT = 10.0
+
+
+def make_client(host: str) -> MozartClient:
+    """既定のリクエストタイムアウトを入れたMozartClientを作る。
+
+    mozart-apiは各APIメソッドの _request_timeout でしかタイムアウトを
+    受け付けないため、REST層の request() を包んで既定値を流し込む。
+    呼び出し側が明示した値はそのまま尊重する。
+    """
     client = MozartClient(host)
+    rest = client.api_client.rest_client
+    original = rest.request
+
+    async def request(*args, _request_timeout=None, **kwargs):
+        return await original(
+            *args, _request_timeout=_request_timeout or REQUEST_TIMEOUT, **kwargs
+        )
+
+    rest.request = request
+    return client
+
+
+async def with_client(host: str, func) -> None:
+    client = make_client(host)
     try:
         await func(client)
     finally:

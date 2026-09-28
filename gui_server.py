@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from bo import load_config, local_ip_towards, resolve_host, save_config
+from bo import load_config, local_ip_towards, make_client, resolve_host, save_config
 from mozart_api.models import (
     Action,
     Bass,
@@ -75,7 +75,7 @@ def save_gui_config(config: dict) -> None:
 
 def client_for(request: web.Request) -> MozartClient:
     device = request.query.get("device") or None
-    return MozartClient(resolve_host(device))
+    return make_client(resolve_host(device))
 
 
 async def api(handler):
@@ -391,7 +391,7 @@ async def start_live_client(app: web.Application):
         yield  # デバイス未登録ならライブ機能なしで起動
         return
 
-    client = MozartClient(host)
+    client = make_client(host)
     live.mozart = client
     try:
         live.state = await build_state(client, host)
@@ -906,7 +906,7 @@ async def night_scheduler(app: web.Application) -> None:
                 end = datetime.time.fromisoformat(night["end"])
                 host = resolve_host(None)
                 if in_window(now, start, end):
-                    client = MozartClient(host)
+                    client = make_client(host)
                     try:
                         volume = await client.get_current_volume()
                         level = volume.level.level if volume.level else 0
@@ -927,7 +927,7 @@ async def night_scheduler(app: web.Application) -> None:
                         and last_standby_date != now_dt.date()
                     ):
                         last_standby_date = now_dt.date()
-                        client = MozartClient(host)
+                        client = make_client(host)
                         try:
                             await client.post_standby()
                             print("[night] 自動スタンバイ実行")

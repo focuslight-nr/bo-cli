@@ -13,7 +13,6 @@ import socket
 
 import pytest
 from aiohttp import ClientError
-from mozart_api.mozart_client import MozartClient
 
 import bo
 
@@ -42,7 +41,7 @@ def host() -> str:
 @contextlib.asynccontextmanager
 async def device(host: str):
     """MozartClientを開閉する。接続不能なら fail ではなく skip。"""
-    client = MozartClient(host)
+    client = bo.make_client(host)
     try:
         yield client
     except UNREACHABLE as e:

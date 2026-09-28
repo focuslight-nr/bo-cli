@@ -22,18 +22,17 @@ import json
 
 from aiohttp import web
 
-from bo import CONFIG_PATH, load_config, resolve_host
+from bo import CONFIG_PATH, load_config, make_client, resolve_host
 from mozart_api.models import (
     OverlayPlayRequest,
     OverlayPlayRequestTextToSpeechTextToSpeech,
 )
-from mozart_api.mozart_client import MozartClient
 
 PORT = 8340
 
 
 async def say(host: str, text: str, lang: str, volume: int | None) -> None:
-    client = MozartClient(host)
+    client = make_client(host)
     # volumeAbsolute: null を送るとMozartが400を返すため、未指定時はフィールド自体を省く
     kwargs = {} if volume is None else {"volume_absolute": int(volume)}
     try:
