@@ -398,6 +398,23 @@ class LiveState:
 live = LiveState()
 
 
+def apply_metadata(state: dict, m, host: str) -> None:
+    """メタデータ通知を状態へ反映する。
+
+    ライブ更新はbuild_state()を通らないため、プレースホルダ除去を
+    ここでも同じように通す(通さないとGUIが一瞬で offline 表示に戻る)。
+    """
+    title = m.title
+    if is_offline_placeholder(title, m.artist_name, state.get("source")):
+        title = None
+    state.update(
+        artist=m.artist_name,
+        title=title,
+        organization=m.organization,
+        art=pick_art_url(m, host) or local_play["art"],
+    )
+
+
 async def live_broadcast() -> None:
     if not live.browsers:
         return
@@ -444,12 +461,7 @@ async def start_live_client(app: web.Application):
                 asyncio.create_task(play_next_in_folder())
 
     async def on_metadata(m) -> None:
-        live.state.update(
-            artist=m.artist_name,
-            title=m.title,
-            organization=m.organization,
-            art=pick_art_url(m, host) or local_play["art"],
-        )
+        apply_metadata(live.state, m, host)
         await live_broadcast()
 
     async def on_source(s) -> None:

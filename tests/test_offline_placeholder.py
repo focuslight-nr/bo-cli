@@ -109,3 +109,59 @@ def test_unit_placeholder_false_none_title():
 
 def test_unit_placeholder_false_empty_title():
     assert gui_server.is_offline_placeholder("", "", "netRadio") is False
+
+
+# ---- ライブ更新経路(WebSocket)。build_state を通らないので別に検証する ----
+
+
+def make_meta(title, artist="", organization="Station"):
+    return SimpleNamespace(
+        title=title, artist_name=artist, organization=organization, art=[]
+    )
+
+
+def test_live_metadata_drops_offline_placeholder():
+    state = {"source": "netRadio"}
+    gui_server.apply_metadata(state, make_meta("Shonan Beach FM - offline"), "10.0.0.5")
+    assert state["title"] is None
+
+
+def test_live_metadata_keeps_organization():
+    state = {"source": "netRadio"}
+    gui_server.apply_metadata(
+        state, make_meta("Shonan Beach FM - offline", organization="Shonan Beach FM 78.9"), "10.0.0.5"
+    )
+    assert state["organization"] == "Shonan Beach FM 78.9"
+
+
+def test_live_metadata_keeps_real_track():
+    state = {"source": "netRadio"}
+    gui_server.apply_metadata(state, make_meta("Song", artist="Artist"), "10.0.0.5")
+    assert state["title"] == "Song"
+    assert state["artist"] == "Artist"
+
+
+def test_live_metadata_keeps_offline_title_when_artist_present():
+    state = {"source": "netRadio"}
+    gui_server.apply_metadata(state, make_meta("X - offline", artist="Artist"), "10.0.0.5")
+    assert state["title"] == "X - offline"
+
+
+def test_live_metadata_keeps_offline_title_on_other_sources():
+    state = {"source": "spotify"}
+    gui_server.apply_metadata(state, make_meta("X - offline"), "10.0.0.5")
+    assert state["title"] == "X - offline"
+
+
+def test_live_metadata_without_known_source_keeps_title():
+    # ソース未確定(初期状態取得に失敗した等)ではフィルタをかけない
+    state = {}
+    gui_server.apply_metadata(state, make_meta("X - offline"), "10.0.0.5")
+    assert state["title"] == "X - offline"
+
+
+def test_live_metadata_falls_back_to_local_art(monkeypatch):
+    monkeypatch.setitem(gui_server.local_play, "art", "/media-art?v=x")
+    state = {"source": "netRadio"}
+    gui_server.apply_metadata(state, make_meta("Song", artist="A"), "10.0.0.5")
+    assert state["art"] == "/media-art?v=x"
