@@ -62,7 +62,9 @@ bo devices / bo default <name>
 ```
 
 - Playback / volume / mute with live status and artwork — pushed in real time over
-  WebSocket (speaker notifications are relayed to the browser; falls back to polling)
+  WebSocket (speaker notifications are relayed to the browser; falls back to polling).
+  When the speaker is in standby / off the network, the UI shows "asleep" instead of
+  an error and auto-recovers (re-fetching Beolink and device info) once it wakes
 - Seek bar (for seekable sources), repeat / shuffle toggles
 - Power-on default volume and hardware volume limit (stored on the speaker itself)
 - **Favorites**: save net-radio stations ("save now playing" or pick from the device's

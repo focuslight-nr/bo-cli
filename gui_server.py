@@ -14,8 +14,24 @@ from pathlib import Path
 from urllib.parse import quote
 
 from aiohttp import web
+import aiohttp.web_protocol as _web_protocol
 
 from bo import load_config, local_ip_towards, make_client, resolve_host, save_config
+
+# Python 3.14 + macOS では、受信コネクションへの SO_KEEPALIVE 設定が
+# まれに EINVAL(Errno 22)で失敗する。機能的には無害(キープアライブが
+# 付かないだけ)だがログを埋めるので、OSError だけ握りつぶす。
+_orig_tcp_keepalive = _web_protocol.tcp_keepalive
+
+
+def _safe_tcp_keepalive(transport):
+    try:
+        _orig_tcp_keepalive(transport)
+    except OSError:
+        pass
+
+
+_web_protocol.tcp_keepalive = _safe_tcp_keepalive
 from mozart_api.models import (
     Action,
     Bass,
@@ -78,6 +94,16 @@ def client_for(request: web.Request) -> MozartClient:
     return make_client(resolve_host(device))
 
 
+def is_offline_error(e: Exception) -> bool:
+    """スピーカーがネットワーク上にいない(スタンバイ等)ことを示すエラーか。"""
+    from aiohttp import ClientError
+
+    if isinstance(e, (ClientError, OSError, asyncio.TimeoutError)):
+        return True
+    msg = str(e)
+    return "No route to host" in msg or "Cannot connect to host" in msg
+
+
 async def api(handler):
     """Mozartクライアントを開閉しJSONで返す薄いラッパー。"""
 
@@ -87,6 +113,12 @@ async def api(handler):
             result = await handler(request, client)
             return web.json_response(result if result is not None else {"ok": True})
         except Exception as e:
+            if is_offline_error(e):
+                # スピーカーがディープスタンバイ等でネットワークから消えている状態。
+                # 故障ではないので、フロントが「休止中」と出せるよう offline を立てる。
+                return web.json_response(
+                    {"error": str(e), "offline": True}, status=503
+                )
             return web.json_response({"error": str(e)}, status=502)
         finally:
             await client.close_api_client()
@@ -162,6 +194,7 @@ async def build_state(client: MozartClient, host: str) -> dict:
         "duration": (progress.total_duration if progress else None)
         or local_play["duration"],
         "art": pick_art_url(meta, host) or local_play["art"],
+        "reachable": True,
     }
 
 
@@ -438,10 +471,32 @@ async def start_live_client(app: web.Application):
 
     client = make_client(host)
     live.mozart = client
-    try:
-        live.state = await build_state(client, host)
-    except Exception as e:
-        print(f"[live] initial state failed: {e}")
+
+    async def refresh_live_state() -> None:
+        """全状態を取り直して reachable を更新し、ブラウザへ配信する。"""
+        try:
+            fresh = await build_state(client, host)
+            fresh["reachable"] = True
+            live.state = fresh
+        except Exception as e:
+            live.state["reachable"] = False
+            print(f"[live] state refresh failed: {e}", flush=True)
+        await live_broadcast()
+
+    await refresh_live_state()  # 起動時に一度(眠っていれば reachable=False)
+
+    async def on_connection() -> None:
+        # 通知WSが(再)接続したら最新状態を取り直す。スタンバイ復帰の自動回復点。
+        print("[live] (re)connected — refreshing state", flush=True)
+        await refresh_live_state()
+
+    async def on_connection_lost() -> None:
+        live.state["reachable"] = False
+        print("[live] connection lost", flush=True)
+        await live_broadcast()
+
+    client.get_on_connection(on_connection)
+    client.get_on_connection_lost(on_connection_lost)
 
     async def on_volume(v) -> None:
         if v.level:
@@ -484,7 +539,7 @@ async def start_live_client(app: web.Application):
     client.get_source_change_notifications(on_source)
     client.get_playback_progress_notifications(on_progress)
     await client.connect_notifications(remote_control=False, reconnect=True)
-    print(f"[live] connected to {host}")
+    print(f"[live] notifications started for {host}", flush=True)
 
     yield
 

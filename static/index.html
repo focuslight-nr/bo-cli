@@ -62,6 +62,7 @@
   .nightgrid { display: grid; grid-template-columns: auto 1fr; gap: 10px 14px; align-items: center; font-size: 14px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; display: inline-block; margin-right: 7px; }
   .dot.on { background: #7ec08a; }
+  .dot.asleep { background: #c8a96e; }
   #btn-lang, #btn-layout { float: right; }
   #btn-layout { margin-right: 8px; }
   /* 2段レイアウト(PC向け): ローカルファイルを右列に */
@@ -187,7 +188,9 @@
   </div>
 
   <div class="card">
-    <h2 data-i18n="multiroom">Multiroom (Beolink)</h2>
+    <h2><span data-i18n="multiroom">Multiroom (Beolink)</span>
+      <button class="chip" style="float:right;margin-top:-6px" id="btn-beolink-reload" onclick="loadBeolink()">⟳</button>
+    </h2>
     <div class="row">
       <span style="font-size:13px" data-i18n="deviceName">Device name</span>
       <input type="text" id="fn-name" class="grow">
@@ -262,6 +265,7 @@ const I18N = {
     emptyDir: 'No audio files in this folder',
     toastMusicDir: 'Music folder saved', toastPlayingFile: 'Playing {name}',
     playedFromMac: 'Streamed from this Mac — playback stops if the Mac sleeps',
+    speakerAsleep: 'Speaker asleep — will refresh when it wakes',
     multiroom: 'Multiroom (Beolink)', deviceName: 'Device name', rename: 'Rename',
     join: '▶ Listen', expandTo: '+ Add to group', leave: 'Leave group', unexpand: 'Remove',
     noPeers: 'No other B&O devices on the network. Peers appear here by name once you add one.',
@@ -311,6 +315,7 @@ const I18N = {
     emptyDir: 'このフォルダに音声ファイルはありません',
     toastMusicDir: '音楽フォルダを保存しました', toastPlayingFile: '{name} を再生',
     playedFromMac: 'このMacから配信されます — Macがスリープすると再生が止まります',
+    speakerAsleep: 'スピーカー休止中 — 復帰すると自動更新します',
     multiroom: 'マルチルーム(Beolink)', deviceName: 'デバイス名', rename: '変更',
     join: '▶ 聴く', expandTo: '+ グループに追加', leave: 'グループ離脱', unexpand: '外す',
     noPeers: 'ネットワーク上に他のB&O機器がありません。追加すると名前で選べるようになります。',
@@ -396,9 +401,20 @@ function fmtTime(sec) {
   return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
 }
 
+let lastReachable = null;
+
 function applyState(s) {
   state = s;
-  $('conn-dot').className = 'dot on';
+  // reachable を明示しない応答(古い形式)は到達できているとみなす
+  const reachable = s.reachable !== false;
+  $('conn-dot').className = reachable ? 'dot on' : 'dot asleep';
+  $('conn-dot').title = reachable ? '' : t('speakerAsleep');
+  // 休止→復帰の遷移で、一度きり読み込むカード(Beolink/overview)を取り直す
+  if (reachable && lastReachable === false) {
+    loadBeolink();
+    loadOverview();
+  }
+  lastReachable = reachable;
   const track = [state.artist, state.title].filter(Boolean).join(' / ')
     || state.organization || '';
   $('track-info').innerHTML =
@@ -433,8 +449,16 @@ function applyState(s) {
 async function refreshState() {
   try {
     const res = await fetch('/api/state');
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 503 || data.offline) {
+      // スピーカー休止中: サーバーは生きているので接続ドットではなく休止表示
+      $('conn-dot').className = 'dot asleep';
+      $('conn-dot').title = t('speakerAsleep');
+      lastReachable = false;
+      return;
+    }
     if (!res.ok) throw new Error();
-    applyState(await res.json());
+    applyState(data);
   } catch(e) {
     $('conn-dot').className = 'dot';
   }
@@ -810,7 +834,12 @@ async function beolinkAction(path, body, toastKey, name) {
 async function loadBeolink() {
   const box = $('beolink-box');
   try {
-    const b = await fetch('/api/beolink').then(r => r.json());
+    const res = await fetch('/api/beolink');
+    const b = await res.json();
+    if (res.status === 503 || b.offline) {
+      box.innerHTML = `<span class="muted-note" style="margin:0">${t('speakerAsleep')}</span>`;
+      return;
+    }
     if (b.error) throw new Error(b.error);
     $('fn-name').value = b.self.name || '';
     box.innerHTML = '';
@@ -895,8 +924,13 @@ async function init() {
   loadBeolink();
   loadMusicDir();
   loadLibrary();
+  loadOverview();
+}
 
-  const ov = await fetch('/api/overview').then(r => r.json());
+async function loadOverview() {
+  const res = await fetch('/api/overview');
+  const ov = await res.json();
+  if (res.status === 503 || ov.offline) return;  // 休止中: 復帰時に再取得される
   if (ov.error) { toast(t('errDeviceInfo'), true); return; }
 
   $('presets').innerHTML = '';
