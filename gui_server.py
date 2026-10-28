@@ -461,6 +461,12 @@ async def live_broadcast() -> None:
     live.browsers -= dead
 
 
+def live_log(msg: str) -> None:
+    """スタンバイ遷移を後から追えるよう、時刻付きでログに出す。"""
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"{ts} [live] {msg}", flush=True)
+
+
 async def start_live_client(app: web.Application):
     """スピーカーの通知WebSocketを購読し、状態をブラウザへ中継する。"""
     try:
@@ -480,19 +486,19 @@ async def start_live_client(app: web.Application):
             live.state = fresh
         except Exception as e:
             live.state["reachable"] = False
-            print(f"[live] state refresh failed: {e}", flush=True)
+            live_log(f"state refresh failed: {e}")
         await live_broadcast()
 
     await refresh_live_state()  # 起動時に一度(眠っていれば reachable=False)
 
     async def on_connection() -> None:
         # 通知WSが(再)接続したら最新状態を取り直す。スタンバイ復帰の自動回復点。
-        print("[live] (re)connected — refreshing state", flush=True)
+        live_log("(re)connected — refreshing state")
         await refresh_live_state()
 
     async def on_connection_lost() -> None:
         live.state["reachable"] = False
-        print("[live] connection lost", flush=True)
+        live_log("connection lost")
         await live_broadcast()
 
     client.get_on_connection(on_connection)
@@ -539,7 +545,7 @@ async def start_live_client(app: web.Application):
     client.get_source_change_notifications(on_source)
     client.get_playback_progress_notifications(on_progress)
     await client.connect_notifications(remote_control=False, reconnect=True)
-    print(f"[live] notifications started for {host}", flush=True)
+    live_log(f"notifications started for {host}")
 
     yield
 
